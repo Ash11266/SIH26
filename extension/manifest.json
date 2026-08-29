@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Privacy-Preserving Vision Agent",
+  "version": "1.0.0",
+  "description": "On-device ViT screen reading, multi-layer local PII redaction, and visual grounding with Gemini VLM.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "offscreen",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "dist/background/index.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Privacy Vision Agent"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/contents/dom-extractor.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

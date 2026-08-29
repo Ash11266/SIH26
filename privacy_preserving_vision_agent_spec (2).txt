@@ -1,0 +1,536 @@
+PROJECT BRIEF FOR CLAUDE CODE
+PRIVACY-PRESERVING BROWSER VISION AGENT (Client-Side ViT + Redaction + Cloud VLM Reasoning)
+================================================================================
+
+ROLE INSTRUCTION FOR CLAUDE CODE
+---------------------------------
+You are building a full end-to-end hackathon prototype (Smart India Hackathon style
+problem statement). Build it incrementally, phase by phase, exactly in the order
+given in "BUILD ORDER" below. After each phase, produce working, runnable code
+(not pseudocode), commit-style, and briefly verify it against the "Definition of
+Done" for that phase before moving to the next. Prefer simple, demoable,
+judge-friendly implementations over theoretically perfect ones — this must run
+live in a demo. Use TypeScript everywhere possible. Comment code so a non-author
+can follow the privacy pipeline, since that is the core judged innovation.
+
+--------------------------------------------------------------------------------
+1. PROBLEM RESTATEMENT (for your own grounding — do not skip)
+--------------------------------------------------------------------------------
+Build a browser extension that:
+  a) Runs a local, on-device vision model (a ViT-family model executed via
+     WebGPU/WASM in the browser) that "reads" the current tab's screen —
+     detecting UI structure, text regions, and elements.
+  b) Detects sensitive/PII content in that visual+DOM context locally
+     (faces, passwords, card numbers, emails, phone numbers, SSNs, API keys,
+     personal names, addresses).
+  c) Redacts that sensitive content BEFORE any network call — blurring faces,
+     blacking out fields, masking text tokens — both in the screenshot pixels
+     and in the structured DOM/accessibility representation.
+  d) Sends only the sanitized context to a server.
+  e) The server calls a cloud VLM/LLM (Google Gemini API) which is
+     redaction-aware (told explicitly that black boxes / [REDACTED:*] tokens
+     represent hidden PII) and returns a structured, executable action
+     (click, type, scroll, navigate, done) to progress a user-given task.
+  f) The extension executes that action, re-captures, and loops until the task
+     is marked done or a step limit is hit.
+
+Judged on: (1) visual context accuracy 25%, (2) PII detection precision/recall
+20%, (3) redaction precision 20%, (4) client resource usage 20%, (5) end-to-end
+latency 15%. Every architecture decision below is made to score well on all
+five — call this out in the demo narration.
+
+--------------------------------------------------------------------------------
+2. HIGH-LEVEL ARCHITECTURE
+--------------------------------------------------------------------------------
+  [Browser Extension - Manifest V3]
+   ├─ Popup UI (React) ............ task input, live redacted preview, logs,
+   │                                 privacy settings, metrics dashboard
+   ├─ Background Service Worker .... orchestrates the capture→infer→redact→
+   │                                 send→act loop (state machine)
+   ├─ Content Script ............... DOM/accessibility-tree extraction,
+   │                                 action execution (click/type/scroll),
+   │                                 injects data-agent-id markers
+   ├─ Offscreen Document / Worker .. runs the local ONNX/WebGPU model so the
+   │                                 UI thread never blocks
+   └─ Local Privacy Engine ......... regex + NER + face-detector + DOM
+                                      heuristics -> redaction mask -> canvas
+                                      pixel redaction + JSON text masking
+              │
+              │  HTTPS POST (sanitized screenshot + sanitized DOM tree only)
+              ▼
+  [Server - Node.js/TypeScript, Express]
+   ├─ /api/agent/step  .............. validates payload contains no raw PII
+   │                                  markers, builds redaction-aware prompt
+   ├─ Gemini Client (function calling / JSON schema mode)
+   └─ Action Validator .............. checks returned action references only
+                                      element IDs that exist in the sanitized
+                                      tree (prevents hallucinated actions)
+              │
+              ▼  JSON action {type, targetId, value, reasoning, done}
+  [back to Content Script -> executes -> next loop iteration]
+
+Nothing that is pixel-identifiable or string-identifiable PII ever leaves the
+client. Only: redacted screenshot (PNG/WebP), redacted DOM-tree JSON, task
+text, and step history.
+
+--------------------------------------------------------------------------------
+3. EXACT TECH STACK (use these unless a listed package is unavailable — then
+   pick the closest actively-maintained substitute and note the swap)
+--------------------------------------------------------------------------------
+Extension scaffold:
+  - Plasmo framework (https://www.plasmo.com/) — TypeScript + React, builds
+    for both Chrome (MV3) and Firefox (MV2/MV3) from one codebase via
+    `plasmo build --target=firefox-mv2` / `--target=chrome-mv3`.
+  - React 18 + Tailwind CSS for popup/options UI.
+  - webextension-polyfill (Plasmo includes this) for cross-browser API calls.
+
+Local vision / ViT inference (runs INSIDE the extension, in an offscreen
+document so it has DOM/canvas access without blocking the UI):
+  - @huggingface/transformers (Transformers.js v3) — supports WebGPU backend
+    via onnxruntime-web, falls back to WASM automatically.
+  - DEFAULT/PRIMARY (build this first — lower risk, well-tested in
+    Transformers.js demos, better for the latency/resource-utilization
+    metrics): "Xenova/detr-resnet-50" for generic object/region detection
+    (also gives a coarse "person" box you can pass to the face pipeline as
+    a region-of-interest crop) + Tesseract.js (pure WASM, no GPU required)
+    for OCR text + bounding boxes. This pairing has a smaller cold-start,
+    simpler output shape (discrete boxes, not generated text), and is much
+    less likely to stall a live demo than a generative vision-language
+    checkpoint.
+  - STRETCH UPGRADE (only attempt once Phase 1-5 below are working end to
+    end): swap in "onnx-community/Florence-2-base-ft" (quantized q4/q8),
+    a single ViT+text-decoder model that can do <OCR_WITH_REGION>, <OD>,
+    and <DENSE_REGION_CAPTION> from one checkpoint — a nicer "one model
+    reads the whole screen" story for the demo, but slower and heavier, so
+    only adopt it if your measured latency budget (Section 6 harness) has
+    headroom.
+  - Keep the downstream interface identical regardless of which is used:
+    a plain list of {text, bbox, label} — so swapping the underlying model
+    is a one-file change in `vision-engine.ts`.
+  - Face detection (for blurring faces in screenshots, e.g. video calls,
+    profile photos): @tensorflow-models/blazeface + @tensorflow/tfjs
+    (tfjs-backend-webgl). BlazeFace is <1MB, sub-20ms on CPU/WebGL, ideal
+    for the resource-utilization metric.
+  - Local PII text classification (beyond regex): a small ONNX NER model via
+    Transformers.js, e.g. "onnx-community/piiranha-v1-detect-personal-
+    information-ONNX" (or the closest actively published PII-NER ONNX
+    checkpoint on Hugging Face at build time — search and swap in if the
+    exact repo name has changed). Runs only on the short text strings
+    extracted by OCR, so it stays fast even if the base model is a small
+    transformer encoder.
+
+Local Privacy/Redaction Engine (pure TS, no ML needed for these — fast,
+deterministic, and gives you near-100% precision on structured PII which is
+graded heavily):
+  - Regex bank for: emails, phone numbers (intl formats), credit/debit card
+    numbers (+ Luhn checksum validation to cut false positives), SSNs /
+    Aadhaar-style 12-digit IDs, IPv4/IPv6, API keys/JWT/bearer tokens,
+    IBAN/bank account numbers.
+  - DOM heuristics (defense-in-depth, independent of vision model):
+      input[type="password"], autocomplete containing "cc-", "current-
+      password", name/id/aria-label matching /ssn|card|cvv|password|otp/i
+      -> always redact regardless of what the vision model saw.
+  - Canvas-based pixel redaction: draw solid black rectangles (default) or
+    a 20px box-blur (CSS `filter: blur()` applied via an offscreen canvas
+    for a nicer demo look) over every merged bounding box before the canvas
+    is ever serialized to a blob/dataURL.
+  - Text redaction: replace matched substrings in the DOM-tree JSON with
+    `[REDACTED:EMAIL]`, `[REDACTED:CARD]`, `[REDACTED:FACE]`, etc. — the TYPE
+    tag is kept (not the value) so the server-side LLM still understands
+    "there is a card field here" without ever seeing the value.
+  - IMPORTANT: log every redaction decision locally with a bbox + type +
+    confidence, so you can compute precision/recall against your own labeled
+    test set at the end (see Section 6, evaluation harness).
+
+Server:
+  - Node.js 20 + TypeScript + Express (keeps one language across the whole
+    stack — easier for a hackathon team to maintain and demo live).
+  - @google/generative-ai (official Gemini SDK). Use model
+    "gemini-2.0-flash" (fast, cheap, vision-capable — good for the latency
+    metric) with a fallback to "gemini-1.5-pro" if you need stronger
+    reasoning for a harder demo task. Use `responseSchema` / structured
+    JSON mode so Gemini is FORCED to return a parseable action object
+    (never free text) — this removes a huge class of parsing bugs.
+  - dotenv for the Gemini API key — the key NEVER ships inside the
+    extension bundle, only lives server-side.
+  - zod for request/response schema validation on both the incoming
+    sanitized payload and the outgoing action JSON.
+  - pino (or simple console+timestamps) for structured latency logging per
+    pipeline stage — feeds the latency metric report.
+
+--------------------------------------------------------------------------------
+3.5 SET-OF-MARKS (SoM) VISUAL GROUNDING — CRITICAL ADDITION
+--------------------------------------------------------------------------------
+Don't rely solely on a JSON element list for grounding actions — Gemini is
+also looking at the actual screenshot, and a text-only ID list can drift out
+of sync with what it visually sees. Instead, ground the two together:
+
+  - Before capturing the screenshot, the content script injects small,
+    numbered badges as absolutely-positioned `<div>` overlays next to every
+    interactive element (button, link, input, select). The badge number IS
+    the element's `id` used everywhere else in the pipeline (see
+    SanitizedElement below) — one ID space, visible in the image AND listed
+    in the JSON tree.
+  - Badge styling requirements (these prevent the badges from corrupting the
+    very context they're meant to clarify):
+      * `pointer-events: none;` — badges must never intercept real clicks or
+        trigger hover states on the underlying page.
+      * `z-index: 999999;` — always visible, never occluded by page content.
+      * Offset from the element's content (e.g. anchored to the element's
+        top-left corner, nudged up/left by ~10px) rather than centered on
+        top of it, so the badge doesn't cover button text/icons the VLM
+        also needs to read.
+  - Order of operations matters: inject marks -> capture screenshot ->
+    immediately clear marks (`clearSetOfMarks()`) so the live page is never
+    left visibly cluttered and so DOM-based redaction/interaction that
+    follows isn't confused by the injected nodes.
+  - Gemini's returned action references a `mark_id`/`targetId` that must
+    equal one of the badge numbers actually present in that step's image —
+    tell it explicitly how many marks exist (see the system prompt in
+    Section 7) so it cannot reference a nonexistent one.
+
+--------------------------------------------------------------------------------
+4. DATA CONTRACTS (implement these as shared TypeScript types, e.g. in a
+   `packages/shared-types` folder imported by both extension and server)
+--------------------------------------------------------------------------------
+
+SanitizedElement {
+  id: string;                // injected data-agent-id, stable per DOM node
+                              // AND the exact number shown in its on-screen
+                              // Set-of-Marks badge (Section 3.5) — one ID
+                              // space shared between the JSON list and the
+                              // pixels Gemini actually looks at
+  role: string;               // "button" | "input" | "link" | "text" | ...
+  bbox: [x, y, w, h];
+  text: string;                // "" or "[REDACTED:<TYPE>]" if it was PII
+  redacted: boolean;
+  attrs: { type?: string; placeholder?: string; ariaLabel?: string };
+}
+
+SanitizedContext {
+  taskId: string;
+  stepIndex: number;
+  screenshot: string;          // base64 PNG/WebP, ALREADY pixel-redacted
+  elements: SanitizedElement[];
+  screenCaption: string;       // Florence-2 <DENSE_REGION_CAPTION> summary,
+                                // used to give the server model global context
+  redactionSummary: { type: string; count: number }[]; // for transparency UI
+  viewport: { w: number; h: number };
+}
+
+AgentAction {
+  type: "click" | "type" | "scroll" | "navigate" | "wait" | "done";
+  targetId?: string;           // must match a SanitizedElement.id
+  value?: string;               // text to type, url to navigate, px to scroll
+  reasoning: string;             // shown in the popup log for explainability
+  done: boolean;
+  confidence: number;
+}
+
+--------------------------------------------------------------------------------
+5. END-TO-END LOOP (implement as a state machine in the background service
+   worker; cap at ~15 steps per task to avoid runaway loops in the demo)
+--------------------------------------------------------------------------------
+1. User types a task in the popup, e.g. "help me fill this checkout form
+   without letting the server see my card number" and clicks Start.
+2. Background worker messages the content script: extract DOM tree, tag
+   interactive elements with data-agent-id, return bounding boxes, and
+   inject the numbered Set-of-Marks badges (Section 3.5) for every
+   interactive element using that same ID.
+   IMPORTANT: `element.getBoundingClientRect()` returns coordinates in CSS
+   pixels, but `chrome.tabs.captureVisibleTab` (step 3) captures physical
+   device pixels. On high-DPI/Retina screens these two scales diverge, so
+   the redaction boxes and badge positions will drift/shrink relative to
+   the actual screenshot. Before sending any bbox out of the content
+   script, multiply x, y, width, and height by `window.devicePixelRatio` so
+   downstream consumers (offscreen redaction engine, SoM badge overlay)
+   are working in the same pixel space as the captured image. This
+   directly affects redaction precision (metric 3) — do not skip it.
+3. Background worker triggers `chrome.tabs.captureVisibleTab` for the
+   screenshot (badges are visible in this capture), then immediately tells
+   the content script to `clearSetOfMarks()` so the live page is clean
+   again.
+4. Offscreen document runs the local vision model (DETR-resnet-50 + OCR, or
+   Florence-2 if upgraded) + BlazeFace + PII-NER + regex bank + DOM
+   heuristics -> produces a redaction mask (list of boxes + types).
+5. Offscreen document draws redactions onto the screenshot canvas and
+   masks matching text in the DOM tree -> builds a SanitizedContext.
+6. Popup shows a "Redacted N items (2 emails, 1 card, 1 face) — preview
+   before sending" thumbnail for transparency (1-click confirm on first
+   run, auto-continue after that — configurable in settings).
+7. Background worker POSTs SanitizedContext + task + short step history to
+   the server.
+8. Server builds a Gemini prompt (system prompt explains the redaction
+   scheme explicitly, see Section 7) and calls Gemini with structured
+   output -> AgentAction.
+9. Server validates targetId exists in the payload's elements list before
+   returning (else re-prompts Gemini once, else returns a "clarify" action).
+10. Content script executes the action (dispatch click/input events,
+    scrollBy, or open a new tab for navigate).
+11. If action.done === true or step limit reached -> stop and show summary
+    (steps taken, total redactions, total latency). Else go to step 2.
+
+--------------------------------------------------------------------------------
+6. EVALUATION / METRICS HARNESS (build this — it is 100% of what gets
+   scored, so it must produce numbers, not just a working demo)
+--------------------------------------------------------------------------------
+Build `/eval` as a small standalone Node/TS script + a folder of ~20-30
+synthetic labeled test screenshots (you generate these yourselves as static
+HTML pages served locally: a login form, a checkout page with a card field,
+a chat screenshot with an email/phone in the text, a video-call mock with a
+stock face photo, a settings page with an API key). For each, hand-author a
+ground-truth JSON of PII bounding boxes + types.
+
+Compute and print a report.json / report.md with:
+  - Visual context accuracy (metric 1): compare Florence-2's detected
+    element/text boxes against a hand-labeled "expected elements" list per
+    page using IoU >= 0.5 matching -> precision/recall/F1.
+  - PII detection precision & recall (metric 2): same IoU-matching approach
+    but only over PII-labeled boxes, broken down by type (email, card,
+    face, password, etc).
+  - Redaction precision (metric 3): of everything the pipeline redacted,
+    what fraction was truly PII per ground truth (avoids over-redaction
+    that would hide non-sensitive UI and hurt usability) — report both
+    over-redaction and under-redaction (leakage) rates separately, since
+    leakage is the more serious failure.
+  - Client resource utilization (metric 4): capture `performance.memory`
+    (Chrome) and wall-clock time for each pipeline stage (capture, local
+    inference, redaction, serialize) via `performance.now()` markers;
+    log peak memory and total local-inference time per step; report
+    averages across the test set.
+  - End-to-end latency (metric 5): timestamp at task start vs. each
+    action returned; report per-step latency broken into
+    {local_inference_ms, network_ms, server_llm_ms, action_exec_ms} so the
+    breakdown itself is a demo-able slide.
+
+Print a final weighted score using the exact competition weights (25/20/20/
+20/15) so the team can quote one number to judges.
+
+--------------------------------------------------------------------------------
+7. GEMINI SYSTEM PROMPT (server-side) — implement close to this
+--------------------------------------------------------------------------------
+"You are a browser automation agent. You receive a SCREENSHOT and a JSON
+tree of on-screen elements. Every interactive element is marked in the
+image with a small numbered badge; that number is its targetId and also
+appears as the `id` field in the JSON element list — the two always match.
+Valid targetId values for this step are exactly {1..N} where N = <count of
+elements provided>; never invent an ID outside this range. IMPORTANT: for
+privacy reasons, some regions of the screenshot appear as solid black/
+blurred boxes, and some element text fields contain tokens like
+[REDACTED:EMAIL] or [REDACTED:CARD] instead of real values. This is
+intentional and expected — treat a redacted box as 'a field/region of type
+X exists here' without needing its content to plan the next UI action.
+Never ask the user to reveal redacted content. Given the user's TASK and
+the STEP HISTORY, return exactly one JSON action object matching the
+provided schema: click, type, scroll, navigate, wait, or done. Respond with
+raw JSON only — no markdown code fences, no conversational text."
+
+--------------------------------------------------------------------------------
+8. SECURITY / PRIVACY GUARANTEES TO IMPLEMENT AND BE ABLE TO DEMO
+--------------------------------------------------------------------------------
+  - Gemini API key lives only in server `.env`, never bundled into the
+    extension.
+  - Server must never persist raw request bodies to disk/logs; log only
+    metadata (timestamps, redaction counts, action types).
+  - All client->server traffic over HTTPS; add a simple shared-secret
+    header or per-session token so random pages can't POST to your server.
+  - Add a "kill switch" setting in the popup: a toggle that, when off,
+    guarantees zero network calls leave the browser (fully local dry-run
+    mode) — good for demoing trust to judges.
+  - Add an on-screen "Sent to server" preview panel in the popup showing
+    literally the redacted screenshot that was transmitted, so judges can
+    visually verify nothing sensitive left the device.
+
+--------------------------------------------------------------------------------
+9. PERFORMANCE OPTIMIZATIONS (for metric 4 and 5 — implement these, don't
+   skip)
+--------------------------------------------------------------------------------
+  - Use quantized (q8 or q4) ONNX weights for Florence-2 and cache them in
+    IndexedDB via Transformers.js's built-in model cache — download once.
+  - Feature-detect `navigator.gpu`; use WebGPU backend when available, WASM
+    (with SIMD + multi-thread if COOP/COEP headers allow) otherwise.
+  - Run all local inference in an offscreen document / dedicated worker so
+    the popup and page UI thread never jank.
+  - Debounce capture: don't run the full pipeline on every DOM mutation —
+    only on explicit "next step" ticks of the agent loop, or when the user
+    invokes the agent.
+  - Downscale the screenshot (e.g. max 1280px on the long edge) before
+    running Florence-2 and before sending to the server — cuts both local
+    inference time and network payload size with negligible accuracy loss
+    for UI-scale text/elements.
+  - Only run the PII-NER transformer model on the short OCR text strings
+    (not on raw pixels), which is orders of magnitude cheaper than running
+    it on full-page content.
+
+--------------------------------------------------------------------------------
+10. FOLDER STRUCTURE (create exactly this, adjust only if a framework
+    forces a different convention)
+--------------------------------------------------------------------------------
+/privacy-vision-agent
+  /extension                (Plasmo project)
+    /background            (service worker: agent state machine)
+    /contents              (content script: DOM extraction + action exec)
+    /offscreen              (offscreen doc: Florence-2 / BlazeFace / NER / redaction engine)
+    /popup                  (React UI: task input, preview, logs, settings, metrics)
+    /lib
+      privacy-engine.ts     (regex bank, DOM heuristics, redaction drawing)
+      vision-engine.ts      (Florence-2 wrapper: OCR_WITH_REGION, OD, caption)
+      face-engine.ts        (BlazeFace wrapper)
+      pii-ner.ts             (transformer PII classifier wrapper)
+      types.ts               (shared with server via /shared)
+  /server
+    /src
+      index.ts               (Express app)
+      routes/agent.ts         (POST /api/agent/step)
+      gemini-client.ts        (structured-output Gemini wrapper + prompt)
+      validators.ts           (zod schemas + targetId existence checks)
+    .env.example
+  /shared
+    types.ts                  (SanitizedContext, AgentAction, etc — imported
+                               by both extension and server via a small
+                               workspace package or copy-build step)
+  /eval
+    fixtures/                 (synthetic labeled test pages + ground-truth JSON)
+    run-eval.ts                (computes and prints the metrics report)
+    report.md                  (generated output)
+  README.md                    (setup + demo script — see Section 11)
+
+--------------------------------------------------------------------------------
+11. BUILD ORDER (execute in this order; each phase should end in something
+    runnable)
+--------------------------------------------------------------------------------
+PHASE 0 — Scaffold
+  - `pnpm create plasmo` extension with React + TypeScript.
+  - Basic Express + TypeScript server with a health-check route.
+  - Definition of done: extension loads unpacked in Chrome, popup renders,
+    server responds to curl.
+
+PHASE 1 — Screen reading (local ViT)
+  - Wire up @huggingface/transformers + Florence-2 ONNX in an offscreen
+    document; expose OCR_WITH_REGION + OD + DENSE_REGION_CAPTION results.
+  - Content script: DOM tree extraction with data-agent-id tagging.
+  - Popup: button that captures + shows the raw detected elements/text as
+    an overlay for sanity-checking accuracy.
+  - Definition of done: on any webpage, clicking "Scan" overlays bounding
+    boxes on a screenshot with correct-looking text/UI element detections.
+
+PHASE 2 — Local privacy engine
+  - Implement regex bank + Luhn check + DOM heuristics + BlazeFace +
+    PII-NER on OCR text.
+  - Implement canvas redaction (blackout/blur) + DOM text masking.
+  - Popup: "redaction preview" panel showing before/after + a list of what
+    was redacted and why (type + detector that flagged it).
+  - Definition of done: on the login/checkout/video-call test fixtures,
+    passwords, card numbers, emails, and faces are visibly redacted in the
+    preview and the console logs a redaction list with types+boxes.
+
+PHASE 3 — Server + Gemini
+  - Implement /api/agent/step with the system prompt from Section 7 and
+    structured JSON output.
+  - Implement targetId validation and one retry on invalid output.
+  - Definition of done: POSTing a hand-crafted SanitizedContext + task via
+    curl/Postman returns a valid AgentAction JSON referencing a real
+    targetId.
+
+PHASE 4 — Full agent loop + action execution
+  - Background service worker state machine wiring Phases 1-3 together end
+    to end, plus content-script action execution (click/type/scroll/
+    navigate) and the step-limit safety cap.
+  - Popup: live step log (action + reasoning + redaction count per step),
+    Start/Stop controls, "kill switch" local-only mode.
+  - Definition of done: given a real multi-step task on a real or fixture
+    page (e.g. "search for wireless mouse and add the cheapest one to
+    cart"), the agent completes it end to end while visibly redacting any
+    PII encountered along the way, live, in the browser.
+
+PHASE 5 — Evaluation harness
+  - Build the fixtures + ground truth, implement run-eval.ts, generate
+    report.md with the five metrics and the weighted final score.
+  - Definition of done: `pnpm run eval` prints precision/recall per PII
+    type, redaction precision/leakage rate, resource + latency breakdowns,
+    and one weighted composite score.
+
+PHASE 6 — Polish for demo
+  - README with a 60-second setup script and a scripted demo narrative
+    that explicitly calls out each of the 5 judged metrics as it happens
+    on screen (e.g. "notice the card number is now [REDACTED:CARD] before
+    anything left the browser — that's our redaction precision metric").
+  - Nice-to-have if time allows: a small on-screen HUD (content script
+    overlay) that flashes a lock icon + redaction count each time a
+    redaction happens, purely for visual impact in the demo.
+
+--------------------------------------------------------------------------------
+12. COMMON HURDLES & HOW TO FIX THEM (CRITICAL)
+--------------------------------------------------------------------------------
+You are likely to hit the following specific problems while implementing this
+architecture. Apply these fixes preemptively rather than debugging them live.
+
+Hurdle 1: Manifest V3 background script can't do canvas/WebGPU work
+  - Problem: The MV3 background script is a Service Worker, which has no DOM
+    access — no <canvas>, and no reliable WebGPU/WebGL context for
+    Transformers.js.
+  - Fix: This is why Section 3/10 puts all local inference and canvas
+    redaction in the Offscreen Document (`chrome.offscreen` API), not in
+    `background.ts`. The background service worker only orchestrates via
+    `chrome.runtime.sendMessage` — it never touches the model or the canvas
+    directly. Do not be tempted to move inference into the background
+    script for "simplicity"; it will silently fail or throw on DOM/GL calls.
+
+Hurdle 2: Redaction box "drift" (misaligned boxes on high-DPI screens)
+  - See the devicePixelRatio note added to Section 5, step 2 — this is the
+    single most common source of visibly wrong redaction boxes in the demo
+    and hits the redaction-precision metric (20%) directly.
+
+Hurdle 3: Heavy model download blocking the browser / demo
+  - Problem: Re-downloading DETR-resnet-50 (or Florence-2) on every
+    extension reload will blow the latency and resource metrics and can
+    freeze the tab on first run.
+  - Fix: Rely on Transformers.js's built-in IndexedDB model cache (this is
+    automatic — don't hand-roll your own caching layer). Keep
+    `env.allowLocalModels = false` so it always resolves from the Hugging
+    Face CDN + cache rather than expecting a local file server. Kick off
+    the model load as soon as the offscreen document is created (extension
+    startup), not when the user clicks "Start Agent" — the first real
+    inference call should hit an already-warm model.
+
+Hurdle 4: Gemini returning malformed JSON or hallucinated targetIds
+  - Problem: Even vision-capable LLMs will sometimes wrap JSON in
+    ```json fences, add conversational preamble ("Here is the action..."),
+    or guess a targetId that isn't in the current element list.
+  - Fix: Section 3's `responseSchema` / `responseMimeType: "application/
+    json"` structured-output mode should already prevent most of this, but
+    treat it as defense-in-depth, not a guarantee — keep the
+    `validators.ts` targetId-existence check and single-retry logic from
+    Phase 3 regardless. Explicitly state the valid ID range in the system
+    prompt (Section 7 already does this: "Valid targetId values ... are
+    exactly {1..N}") so the model has no ambiguity about the current
+    element count.
+
+Hurdle 5: CORS errors when the extension POSTs to the local backend
+  - Problem: The extension (running from a `chrome-extension://` origin)
+    calling `http://localhost:8000/api/agent/step` will be blocked by the
+    browser's CORS policy unless the server explicitly allows it.
+  - Fix: In `server/src/index.ts`, register `cors()` (or FastAPI/Express
+    equivalent) before your routes, with `allow_origins: ["*"]`,
+    `allow_methods: ["*"]`, `allow_headers: ["*"]`. Wildcard origins are
+    acceptable for this local hackathon prototype since the server also
+    checks the shared-secret/session header (Section 8) — don't rely on
+    CORS alone as an access-control mechanism.
+
+--------------------------------------------------------------------------------
+13. STRETCH GOALS (only if core is solid and time remains)
+--------------------------------------------------------------------------------
+  - Support Firefox build target via `plasmo build --target=firefox-mv2`
+    and demo cross-browser parity.
+  - Add a differential-privacy-style noise option on non-PII numeric UI
+    text for extra-cautious mode.
+  - Add a local fallback LLM (e.g., a small quantized model via
+    Transformers.js) so the agent can still answer simple steps fully
+    offline if the server is unreachable, falling back to Gemini only for
+    harder reasoning steps — nice talking point for "hybrid edge-cloud."
+  - Add user-adjustable redaction sensitivity slider (regex-only vs
+    regex+NER+vision) with a live precision/recall trade-off readout,
+    directly demonstrating the "balance latency vs accuracy" requirement
+    from the problem statement.
+
+END OF SPEC

@@ -1,0 +1,48 @@
+{
+  "metrics": {
+    "visualContextAccuracy": 1,
+    "piiPrecision": 1,
+    "piiRecall": 0.9091,
+    "redactionPrecision": 1,
+    "leakageRate": 0.0909,
+    "overRedactionRate": 0,
+    "avgLocalInferenceMs": 0.4,
+    "avgEndToEndLatencyMs": 120.4,
+    "compositeScorePercent": 96.34
+  },
+  "piiBreakdown": {
+    "EMAIL": {
+      "expected": 3,
+      "detected": 3
+    },
+    "PHONE": {
+      "expected": 1,
+      "detected": 1
+    },
+    "SSN": {
+      "expected": 1,
+      "detected": 1
+    },
+    "CARD": {
+      "expected": 1,
+      "detected": 1
+    },
+    "PASSWORD": {
+      "expected": 2,
+      "detected": 2
+    },
+    "API_KEY": {
+      "expected": 1,
+      "detected": 0
+    },
+    "IP": {
+      "expected": 1,
+      "detected": 1
+    },
+    "FACE": {
+      "expected": 1,
+      "detected": 1
+    }
+  },
+  "timestamp": "2026-08-29T18:58:01.890Z"
+}

@@ -1,0 +1,38 @@
+{
+  "login.html": {
+    "expectedElementsCount": 3,
+    "pii": [
+      { "type": "EMAIL", "match": "user@example.com" },
+      { "type": "PASSWORD", "match": "SuperSecretPassword123!" }
+    ]
+  },
+  "checkout.html": {
+    "expectedElementsCount": 5,
+    "pii": [
+      { "type": "EMAIL", "match": "customer@privacy.org" },
+      { "type": "CARD", "match": "4532 0151 8923 1198" },
+      { "type": "PASSWORD", "match": "842" }
+    ]
+  },
+  "chat.html": {
+    "expectedElementsCount": 3,
+    "pii": [
+      { "type": "EMAIL", "match": "alice.support@corp.net" },
+      { "type": "PHONE", "match": "+1-555-019-2834" },
+      { "type": "SSN", "match": "4829-1092-8471" }
+    ]
+  },
+  "video_call.html": {
+    "expectedElementsCount": 3,
+    "pii": [
+      { "type": "FACE", "match": "Profile Avatar" }
+    ]
+  },
+  "settings.html": {
+    "expectedElementsCount": 3,
+    "pii": [
+      { "type": "API_KEY", "match": "mock_api_key_sample_123456789012345" },
+      { "type": "IP", "match": "192.168.1.105" }
+    ]
+  }
+}

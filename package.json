@@ -1,0 +1,13 @@
+{
+  "name": "privacy-preserving-vision-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Client-Side ViT + Multi-Layer Redaction + Cloud VLM Reasoning Browser Vision Agent",
+  "scripts": {
+    "server:dev": "npm --prefix server run dev",
+    "server:build": "npm --prefix server run build",
+    "server:start": "npm --prefix server run start",
+    "extension:build": "npm --prefix extension run build",
+    "eval": "npx tsx eval/run-eval.ts"
+  }
+}

@@ -1,0 +1,20 @@
+# Node dependencies
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+
+# Build output
+dist/
+build/
+.plasmo/
+
+# Environment and secrets
+.env
+.env.local
+*.log
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,12 @@
+{
+  "name": "privacy-vision-agent-eval",
+  "version": "1.0.0",
+  "description": "Evaluation and metrics harness for Privacy-Preserving Vision Agent",
+  "scripts": {
+    "eval": "tsx run-eval.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.3.3"
+  }
+}
