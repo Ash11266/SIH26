@@ -43,8 +43,10 @@ export async function getNextAgentAction(
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
+  // Default to gemini-1.5-flash with fallback support
+  const modelName = process.env.GEMINI_MODEL || "gemini-1.5-flash";
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: modelName,
     systemInstruction: GEMINI_SYSTEM_PROMPT,
     generationConfig: {
       responseMimeType: "application/json",

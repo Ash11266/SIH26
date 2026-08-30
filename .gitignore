@@ -13,6 +13,12 @@ build/
 .env.local
 *.log
 
+# Temporary test scripts and video generation prompt (kept local only)
+test-live-step.ts
+list-models.ts
+server/src/list-models.ts
+generatevideo.md
+
 # IDE and OS files
 .DS_Store
 Thumbs.db
