@@ -77,14 +77,4 @@ npm run eval
 | **5. End-to-End Latency** | **15%** | **120.6ms** | Sub-1s total step loop | **PASS** |
 | **FINAL WEIGHTED COMPOSITE SCORE** | **100%** | **98.13%** | Overall Hackathon Score | **EXCELLENT** |
 
----
 
-## 🎬 60-Second Demo Presentation Script for Judges
-
-1. **Introduction**: *"Judges, current AI web agents transmit raw screenshots and unmasked DOM data to the cloud — leaking credit cards, passwords, and personal faces. Our extension solves this at the edge."*
-2. **Demonstration**:
-   - Open a checkout page with a credit card field and password input.
-   - Click the extension icon and enter task: *"Fill checkout form safely."*
-   - Point to the **Live Sanitized Transmission Preview** panel in the popup UI: *"Notice how our offscreen local engine blacked out the card box and transformed text to `[REDACTED:CARD]` and `[REDACTED:PASSWORD]` before anything left the browser."*
-3. **Show Kill Switch**: *"Clicking 'Offline Mode' activates our zero-network kill switch, confirming 100% on-device safety."*
-4. **Metrics Proof**: Run `npm run eval` live: *"Our evaluation harness scores **98.13% composite score** with 0% PII leakage to the server."*
