@@ -1,5 +1,5 @@
 // extension/src/background/index.ts
-import { AgentAction, SanitizedContext, StepHistoryItem } from "../../shared/types";
+import { AgentAction, SanitizedContext, StepHistoryItem } from "../../../shared/types";
 
 let agentState: {
   running: boolean;

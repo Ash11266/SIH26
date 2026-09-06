@@ -1,5 +1,5 @@
 // extension/src/contents/dom-extractor.ts
-import { SanitizedElement, AgentAction } from "../../shared/types";
+import { SanitizedElement, AgentAction } from "../../../shared/types";
 
 const SOM_CONTAINER_ID = "__privacy_agent_som_container__";
 
