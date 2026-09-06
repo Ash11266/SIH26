@@ -6,9 +6,9 @@
     "redactionPrecision": 1,
     "leakageRate": 0.0909,
     "overRedactionRate": 0,
-    "avgLocalInferenceMs": 0.4,
-    "avgEndToEndLatencyMs": 120.4,
-    "compositeScorePercent": 96.34
+    "avgLocalInferenceMs": 1.4,
+    "avgEndToEndLatencyMs": 121.4,
+    "compositeScorePercent": 96.22
   },
   "piiBreakdown": {
     "EMAIL": {
@@ -44,5 +44,5 @@
       "detected": 1
     }
   },
-  "timestamp": "2026-08-29T18:58:01.890Z"
+  "timestamp": "2026-09-06T18:19:55.885Z"
 }

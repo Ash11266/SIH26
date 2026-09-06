@@ -1,8 +1,8 @@
 # Privacy-Preserving Browser Vision Agent — Evaluation Report
 
-Generated: 30/8/2026, 12:28:01 am
+Generated: 6/9/2026, 11:49:55 pm
 
-## Final Composite Score: **96.34%**
+## Final Composite Score: **96.22%**
 
 ### Competition Metric Breakdown
 
@@ -11,8 +11,8 @@ Generated: 30/8/2026, 12:28:01 am
 | **1. Visual Context Accuracy** | 25% | **100.0%** | IoU >= 0.5 matching | PASS |
 | **2. PII Detection Recall** | 20% | **90.9%** | High sensitivity | PASS |
 | **3. Redaction Precision** | 20% | **100.0%** | Zero Leakage Goal | PASS |
-| **4. Client Resource Usage** | 20% | **0.4ms** | Sub-50ms local processing | PASS |
-| **5. End-to-End Latency** | 15% | **120.4ms** | Sub-1s total round-trip | PASS |
+| **4. Client Resource Usage** | 20% | **1.4ms** | Sub-50ms local processing | PASS |
+| **5. End-to-End Latency** | 15% | **121.4ms** | Sub-1s total round-trip | PASS |
 
 ---
 

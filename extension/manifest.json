@@ -14,7 +14,7 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "dist/extension/src/background/index.js",
+    "service_worker": "dist/background.js",
     "type": "module"
   },
   "action": {
@@ -24,7 +24,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["dist/extension/src/contents/dom-extractor.js"],
+      "js": ["dist/dom-extractor.js"],
       "run_at": "document_idle"
     }
   ]
