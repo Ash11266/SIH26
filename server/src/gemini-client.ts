@@ -43,17 +43,11 @@ export async function getNextAgentAction(
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  // Default to gemini-1.5-flash with fallback support
-  const modelName = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: GEMINI_SYSTEM_PROMPT,
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: ACTION_RESPONSE_SCHEMA,
-      temperature: 0.1,
-    },
-  });
+
+  // Supported models priority list (gemini-1.5 and 2.5 flash are deprecated/retired on v1beta)
+  const requestedModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  const fallbackModels = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"];
+  const candidateModels = Array.from(new Set([requestedModel, ...fallbackModels]));
 
   const validIds = context.elements.map((e) => e.id);
   const promptText = `
@@ -102,17 +96,80 @@ ${JSON.stringify(
     });
   }
 
+  let parsed: any = null;
+  let lastError: any = null;
+  let chosenModelName = "";
+
+  for (const modelCandidate of candidateModels) {
+    // Skip older models known to be deprecated or retired
+    if (
+      modelCandidate.includes("1.5") ||
+      modelCandidate === "gemini-2.5-flash" ||
+      modelCandidate === "gemini-2.5-pro"
+    ) {
+      continue;
+    }
+
+    const model = genAI.getGenerativeModel({
+      model: modelCandidate,
+      systemInstruction: GEMINI_SYSTEM_PROMPT,
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: ACTION_RESPONSE_SCHEMA,
+        temperature: 0.1,
+      },
+    });
+
+    // Retry transient network or 503 errors
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const result = await model.generateContent(inlineParts);
+        const responseText = result.response.text();
+        parsed = JSON.parse(responseText);
+        chosenModelName = modelCandidate;
+        break;
+      } catch (err: any) {
+        lastError = err;
+        const msg = err?.message || String(err);
+        if (err?.status === 404 || msg.includes("not found") || msg.includes("no longer available")) {
+          console.warn(`[Gemini Model Warning] Model '${modelCandidate}' unavailable (${msg}). Trying fallback...`);
+          break;
+        }
+        if (attempt < 2) {
+          console.warn(`[Gemini Retry] Attempt ${attempt} failed for ${modelCandidate} (${msg}). Retrying in 1s...`);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+    }
+
+    if (parsed) {
+      break;
+    }
+  }
+
+  if (!parsed) {
+    console.error("[Gemini Error] All candidate models failed. Last error:", lastError);
+    const fallback = generateMockAction(task, context, history);
+    fallback.reasoning = `Fallback execution due to API error: ${lastError?.message || lastError}`;
+    return { action: fallback, latencyMs: Date.now() - startTime };
+  }
+
   try {
-    const result = await model.generateContent(inlineParts);
-    const responseText = result.response.text();
-    const parsed = JSON.parse(responseText);
     const validated = AgentActionSchema.parse(parsed);
 
     // Validate targetId boundary check
     const targetCheck = validateActionTarget(validated, context.elements);
     if (!targetCheck.valid) {
-      console.warn(`[Gemini Validation Warning] ${targetCheck.error}. Retrying prompt once...`);
-      // Retry once with explicit boundary warning
+      console.warn(`[Gemini Validation Warning] ${targetCheck.error}. Retrying prompt once with ${chosenModelName}...`);
+      const model = genAI.getGenerativeModel({
+        model: chosenModelName,
+        systemInstruction: GEMINI_SYSTEM_PROMPT,
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: ACTION_RESPONSE_SCHEMA,
+          temperature: 0.1,
+        },
+      });
       const retryResult = await model.generateContent([
         ...inlineParts,
         {
@@ -128,10 +185,9 @@ ${JSON.stringify(
 
     return { action: validated as AgentAction, latencyMs: Date.now() - startTime };
   } catch (err: any) {
-    console.error("[Gemini Error]", err);
-    // Safe fallback action if model API fails or errors
+    console.error("[Gemini Validation Error]", err);
     const fallback = generateMockAction(task, context, history);
-    fallback.reasoning = `Fallback execution due to API error: ${err.message || err}`;
+    fallback.reasoning = `Fallback execution due to validation error: ${err.message || err}`;
     return { action: fallback, latencyMs: Date.now() - startTime };
   }
 }
